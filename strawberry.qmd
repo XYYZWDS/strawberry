@@ -1,0 +1,609 @@
+---
+title: "Strawberry"
+author: "Yang Xiao"
+date: 2023 Oct 16
+format: pdf
+engine: knitr
+---
+
+
+```{r}
+
+
+library(knitr)  
+library(kableExtra)
+library(tidyverse)
+library(stringr)
+```
+
+## Read the file
+
+```{r warning=FALSE, message=FALSE}
+
+
+strawberry <- read_csv("strawberry.csv", col_names = TRUE)
+
+# glimpse(strawberry)
+```
+
+
+
+
+## Date cleaning
+
+
+
+```{r}
+
+
+drop_one_value_col <- function(df){
+  drop <- NULL
+  for (i in 1:ncol(df)){
+    unique_count <- n_distinct(df[, i])
+    if (unique_count == 1){
+      drop <- c(drop, i)
+    }
+  }
+  
+  if (length(drop) == 0) {
+    print("No columns to drop.")
+    return(df)
+  } else {
+    cat("Columns dropped:", colnames(df)[drop], "\n")
+    strawberry <- df[, -drop]
+    return(strawberry)
+  }
+}
+
+## Use the function
+str <- drop_one_value_col(strawberry)
+
+str <- str$col_name
+
+strawberry <- strawberry |> select(!all_of(str))
+
+
+vals=strawberry$Value
+vals=sub(",","",vals)
+vals=sub('""',"",vals)
+vals=as.numeric(vals)
+strawberry["Value"]=vals
+
+state_all <- strawberry |> group_by(State) |> count()
+
+strawberry_census <- strawberry |> filter((Program=="CENSUS"))
+ strawberry_census <- strawberry_census |>
+  separate_wider_delim(  cols = `Data Item`,
+                         delim = ",",
+                         names = c("Fruit",
+                                 "temp1",
+                                 "temp2",
+                                 "temp3"),
+                         too_many = "error",
+                         too_few = "align_start"
+                       )
+
+strawberry_census <- strawberry_census |>
+  separate_wider_delim(  cols = temp1,
+                         delim = " - ",
+                         names = c("crop_type",
+                                 "prop_acct"),
+                         too_many = "error",
+                         too_few = "align_start"
+                       )
+
+
+
+strawberry_census$crop_type <- str_trim(strawberry_census$crop_type, side = "both")
+
+strawberry_census$temp2 <- str_trim(strawberry_census$temp2, side = "both")
+
+strawberry_census$temp3 <- str_trim(strawberry_census$temp3, side = "both")
+
+
+
+##Fresh Market
+## make a copy of the temp2 column named `Fresh Market`.
+strawberry_census <- strawberry_census |> mutate(`Fresh Market` = temp2, .after = temp2)
+
+## Remove cells in `Fresh Market` column 
+##   that begin "MEASURED"
+strawberry_census$`Fresh Market` <- strawberry_census$`Fresh Market` |> str_replace( "^MEA.*", "")
+
+## Remove cells in `Fresh Market` column 
+##   that begin "PROCESSING" 
+strawberry_census$`Fresh Market` <- strawberry_census$`Fresh Market` |> str_replace( "^P.*", "")
+
+## substitute a space for NA in `Fresh Market` column
+strawberry_census$`Fresh Market`[is.na(strawberry_census$`Fresh Market`)] <- ""  
+
+## in temp2 column, remove cells that begin "FRESH"
+ strawberry_census$temp2 <- strawberry_census$temp2 |> str_replace("^F.*", "")
+
+## Now fix the entries in the `Fresh Market` column
+##   Remove "FRESH MARKET - " from the cells
+strawberry_census$`Fresh Market` <- strawberry_census$`Fresh Market` |> str_replace("^FRESH MARKET - ", "")
+
+## Create a "Process Market" column
+
+
+# Make a copy of temp2 named `Process Market`
+strawberry_census <- strawberry_census |> mutate(`Process Market` = temp2, .after = temp2)
+
+# Remove `Process Market` cells beginning "MEASURED"
+strawberry_census$`Process Market` <-  strawberry_census$`Process Market` |> str_replace("^MEA.*", "")
+
+# Substitute space for NA in `Process Market` column
+strawberry_census$`Process Market`[is.na(strawberry_census$`Process Market`)] <- ""
+
+# In temp2, remove cells that begin "PROCESSING"
+strawberry_census$temp2 <- strawberry_census$temp2 |> str_replace("^P.*", "")
+
+# In `Process Market`, remove "PROCESSING - " from cells
+strawberry_census$`Process Market` <-  strawberry_census$`Process Market` |> str_replace("PROCESSING - ", "")
+
+## substitute a space for NA in prop_acct column
+strawberry_census$prop_acct[is.na(strawberry_census$prop_acct)] <- "" 
+
+## substitute a space for NA in temp2 column
+strawberry_census$temp2[is.na(strawberry_census$temp2)] <- "" 
+
+## substitute a space for NA in temp2 column
+strawberry_census$temp3[is.na(strawberry_census$temp3)] <- "" 
+
+
+
+# Combine temp2 and temp3 columns into Metric
+strawberry_census <- strawberry_census |> unite(temp2, temp3, col = "Metric", sep = "")
+
+# Remove "MEASURED IN " from the cells in the Metric column
+strawberry_census$Metric <- strawberry_census$Metric |> str_replace("MEASURED IN ", "")
+
+# Move Metric to the end
+strawberry_census <- strawberry_census |> relocate(Metric, .before = Domain)
+
+strawberry_census <- strawberry_census |> relocate(`Process Market`, .before = Metric)
+
+strawberry_census <- strawberry_census |> rename(Totals = prop_acct)
+
+```
+
+
+
+
+##  CENSUS initial question
+
+
+
+Which continent has the highest number of rows (n)? And the ten continents with the highest average value? (Counted as Operations With SALES, CWT, $respectively)
+
+
+
+
+
+##  CENSUS EDA and solution
+
+
+
+###  (a)The highest number of rows (n)
+
+
+```{r}
+##EDA
+
+#CENSUS
+## Which state has the most rows($)
+
+strawberry_census_dollar <- strawberry_census |>
+  filter(!is.na(Value) & (Metric == "$"))
+
+
+top_10_states_dollar <- strawberry_census_dollar |>
+  group_by(State) |>
+  summarise(avg_value = mean(Value), n = n())|>
+  arrange(desc(n)) |>
+  top_n(10)
+
+
+library(ggplot2)
+
+ggplot(top_10_states_dollar, aes(x = State, y = avg_value)) +
+  geom_bar(stat = "identity", fill = "dodgerblue") +
+  labs(title = "Top 10 States  by Average Value($)",
+       x = "State",
+       y = "Average Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(top_10_states_dollar)
+
+## Which state has the most rows(CWT)
+
+strawberry_census_CWT <- strawberry_census |>
+  filter(!is.na(Value) & (Metric == "CWT"))
+
+
+top_10_states_CWT <- strawberry_census_CWT |>
+  group_by(State) |>
+  summarise(avg_value = mean(Value), n = n())|>
+  arrange(desc(n)) |>
+  top_n(10)
+
+
+library(ggplot2)
+
+ggplot(top_10_states_CWT, aes(x = State, y = avg_value)) +
+  geom_bar(stat = "identity", fill = "dodgerblue") +
+  labs(title = "Top 10 States  by Average Value(CWT)",
+       x = "State",
+       y = "Average Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(top_10_states_CWT)
+
+
+## Which state has the most rows(OWS)
+strawberry_census_OWS <- strawberry_census |>
+  filter(!is.na(Value)) |>
+           filter(Totals == "OPERATIONS WITH SALES"|'Fresh Market'=="OPERATIONS WITH SALES"|'Process Market'=="OPERATIONS WITH SALES")
+
+
+top_10_states_OWS <- strawberry_census_OWS |>
+  group_by(State) |>
+  summarise(avg_value = mean(Value), n = n())|>
+  arrange(desc(n)) |>
+  top_n(10)
+
+
+library(ggplot2)
+
+ggplot(top_10_states_OWS, aes(x = State, y = avg_value)) +
+  geom_bar(stat = "identity", fill = "dodgerblue") +
+  labs(title = "Top 10 States  by Average Value(OWS)",
+       x = "State",
+       y = "Average Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+print(top_10_states_OWS)
+
+
+
+
+###
+# Create data frames for each metric (OWS, CWT, Dollar)
+ df_ows <- data.frame(State = top_10_states_OWS$State, Metric = "OWS", avg_value = top_10_states_OWS$avg_value)
+ df_cwt <- data.frame(State = top_10_states_CWT$State, Metric = "CWT", avg_value = top_10_states_CWT$avg_value)
+ df_dollar <- data.frame(State = top_10_states_dollar$State, Metric = "Dollar", avg_value = top_10_states_dollar$avg_value)
+
+# Combine the data frames
+ common_states_data <- rbind(df_ows, df_cwt, df_dollar)
+ 
+# Find the states that are common among top_10_states_OWS, top_10_states_dollar, and top_10_states_CWT
+ common_states <- intersect(top_10_states_OWS$State, intersect(top_10_states_dollar$State, top_10_states_CWT$State))
+##Select common state
+selected_states <- c("CONNECTICUT", "IDAHO", "MASSACHUSETTS", "MINNESOTA", "MONTANA", "NORTH CAROLINA", "OHIO", "PENNSYLVANIA", "VERMONT", "WISCONSIN")
+ 
+ common_states_data <- common_states_data %>%
+   filter(State %in% selected_states)
+
+ 
+ # Create a data frame that includes a numeric label for each state
+common_states_data <- common_states_data |>
+  mutate(StateLabel = factor(State, levels = common_states))
+
+# Create a vector to store the units for each metric
+unit_labels <- c("Unit for OWS", "Unit for CWT", "Unit for Dollar")
+
+# Create a ggplot with facets for each metric
+gg <- ggplot(common_states_data, aes(x = State, y = avg_value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Average Value for Common States (OWS, CWT, Dollar)",
+    x = "State"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1) )
+
+# Add different y-axis labels for each facet
+gg <- gg + facet_wrap(~ Metric, scales = "free_y", labeller = labeller(Metric = unit_labels))
+
+print(gg)
+
+cat("The cities with the top 10 ave_sales are($):",top_10_states_dollar$State, "\n")
+cat("The cities with the top 10 ave_sales are(CWT):",top_10_states_CWT$State, "\n")
+
+cat("The cities with the top 10 ave_sales are(OWS):",top_10_states_OWS$State, "\n")
+cat("The cities with the highest overall sales are:",common_states, "\n")
+```
+
+
+
+###  (b)  the highest average value
+
+
+
+
+
+
+
+
+```{r}
+##Average value rank for CENSUS
+
+
+##For dollar
+strawberry_census_dollar <- strawberry_census |>
+  filter(!is.na(Value) & (Metric == "$"))
+
+state_avg_sales_dollar <- strawberry_census_dollar %>%
+  group_by(State) %>%
+  summarise(avg_sales = mean(Value)) %>%
+  top_n(10, wt = avg_sales)
+
+
+
+
+library(ggplot2)
+
+ggplot(state_avg_sales_dollar, aes(x = reorder(State, -avg_sales), y = avg_sales)) +
+  geom_bar(stat = "identity", fill = "dodgerblue") +
+  labs(title = "Top 10 States by Average Sales($)",
+       x = "State",
+       y = "Average Sales") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(state_avg_sales_dollar$State)
+
+
+
+###For CWT
+
+
+strawberry_census_CWT <- strawberry_census |>
+  filter(!is.na(Value) & (Metric == "CWT"))
+
+
+state_avg_sales_CWT <- strawberry_census_CWT %>%
+  group_by(State) %>%
+  summarise(avg_sales = mean(Value)) %>%
+  top_n(10, wt = avg_sales)
+
+
+
+
+library(ggplot2)
+
+ggplot(state_avg_sales_CWT, aes(x = reorder(State, -avg_sales), y = avg_sales)) +
+  geom_bar(stat = "identity", fill = "dodgerblue") +
+  labs(title = "Top 10 States by Average Sales(CWT)",
+       x = "State",
+       y = "Average Sales") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(state_avg_sales_CWT$State)
+
+##For OWS
+
+strawberry_census_OWS <- strawberry_census |>
+  filter(!is.na(Value)) |>
+           filter(Totals == "OPERATIONS WITH SALES"|'Fresh Market'=="OPERATIONS WITH SALES"|'Process Market'=="OPERATIONS WITH SALES")
+
+
+state_avg_sales_OWS <- strawberry_census_OWS %>%
+  group_by(State) %>%
+  summarise(avg_sales = mean(Value)) %>%
+  top_n(10, wt = avg_sales)
+
+
+
+
+library(ggplot2)
+
+ggplot(state_avg_sales_OWS, aes(x = reorder(State, -avg_sales), y = avg_sales)) +
+  geom_bar(stat = "identity", fill = "dodgerblue") +
+  labs(title = "Top 10 States by Average Sales(CWT)",
+       x = "State",
+       y = "Average Sales") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+print(state_avg_sales_OWS$State)
+
+
+
+###
+# Create data frames for each metric (OWS, CWT, Dollar)
+ df_ows <- data.frame(State = state_avg_sales_OWS$State, Metric = "OWS", avg_value = state_avg_sales_OWS$avg_sales)
+ df_cwt <- data.frame(State = state_avg_sales_CWT$State, Metric = "CWT", avg_value = state_avg_sales_CWT$avg_sales)
+ df_dollar <- data.frame(State = state_avg_sales_dollar$State, Metric = "Dollar", avg_value = state_avg_sales_dollar$avg_sales)
+
+# Combine the data frames
+ common_states_data <- rbind(df_ows, df_cwt, df_dollar)
+
+# Find the states that are common among top_10_states_OWS, top_10_states_dollar, and top_10_states_CWT
+ common_states <- intersect(state_avg_sales_OWS$State, intersect(state_avg_sales_dollar$State, state_avg_sales_CWT$State))
+  print(common_states)
+##Select common state
+selected_states <- c("NEW YORK","OREGON","VERMONT","WASHINGTON")
+ 
+ common_states_data <- common_states_data %>%
+   filter(State %in% selected_states)
+
+ 
+ # Create a data frame that includes a numeric label for each state
+common_states_data <- common_states_data |>
+  mutate(StateLabel = factor(State, levels = common_states))
+
+# Create a vector to store the units for each metric
+unit_labels <- c("Unit for OWS", "Unit for CWT", "Unit for Dollar")
+
+# Create a ggplot with facets for each metric
+gg <- ggplot(common_states_data, aes(x = State, y = avg_value, fill = Metric)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(
+    title = "Average Value for Common States (OWS, CWT, Dollar)",
+    x = "State"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1) )
+
+# Add different y-axis labels for each facet
+gg <- gg + facet_wrap(~ Metric, scales = "free_y", labeller = labeller(Metric = unit_labels))
+
+print(gg)
+
+cat("The cities with the top 10 ave_sales are($):",state_avg_sales_dollar$State, "\n")
+cat("The cities with the top 10 ave_sales are(CWT):",state_avg_sales_CWT$State, "\n")
+
+cat("The cities with the top 10 ave_sales are(OWS):",state_avg_sales_OWS$State, "\n")
+cat("The cities with the highest overall sales are:",common_states, "\n")
+
+
+```
+
+
+
+##  SURVEY initial question
+
+How to convert the chemical code to CAS and further determine the corresponding toxicity?
+What is the frequency of each toxicity?
+
+##   EDA and Solution
+
+
+```{r}
+
+
+strwb_survey<- strawberry |> filter((Program=="SURVEY"))
+stb_survey <- strwb_survey %>%
+  filter(str_detect(`Data Item`, "MEASURED IN")) %>%
+  mutate(`Data Item` = str_extract(`Data Item`, "(?<=MEASURED IN ).*"))
+stb_survey <- stb_survey %>%
+  mutate(
+    Chemical = if_else(str_detect(`Domain Category`, "\\(.*=.*\\)"),
+                       str_extract(`Domain Category`, "(?<=\\().*?(?=\\=)"),
+                       NA_character_),
+    Chemical_Code = if_else(str_detect(`Domain Category`, "\\(.*=.*\\)"),
+                            str_extract(`Domain Category`, "(?<=\\=).*?(?=\\))"),
+                            NA_character_)
+  )
+
+
+stb_survey <- subset(stb_survey, select = -Program)
+stb_survey <- subset(stb_survey, select = -`Domain Category`)
+```
+
+
+
+###  Dealing with Missing Values, Outliers, and Duplicates
+
+
+```{r}
+stb_survey <- stb_survey[, !sapply(stb_survey, function(col) all(is.na(col)))]
+
+
+stb_survey <- stb_survey[!is.na(stb_survey$Value), ]
+
+
+stb_survey <- stb_survey[stb_survey$State != "OTHER STATES", ]
+
+strawberry_survey_chemical <- stb_survey  |>
+  filter(!is.na(Chemical_Code))
+```
+
+###   Transfer the chemical code
+
+
+```{r}
+# Load the required packages
+library(jsonlite)
+library(httr)
+library(future)
+library(furrr)
+
+# function that can translate PC to CAS
+get_cas <- function(PC){
+    PC <- sprintf("%06d", as.numeric(PC))
+    path <- paste0("https://ordspub.epa.gov/ords/pesticides/apprilapi/?q=%7b%22ais%22:%7b%22$instr%22:%22", PC,"%22%7d%7d")
+    r <- GET(url = path)
+    r_text <- content(r, as = "text", encoding = "UTF-8")
+    df <- fromJSON(r_text, flatten = TRUE)
+    df_strwb <- df$items[grepl("Strawberries", df$items$sites, fixed=T),]
+    ais <- df_strwb$ais[1]
+    pattern <- "\\(([^A-Za-z]+)\\/([0-9-]+)\\)"
+    text <- ais
+    matches <- regmatches(text, gregexpr(pattern, text))
+    cas <- sapply(matches, function(x) gsub(".*\\/([0-9-]+)\\)", "\\1", x)) 
+    if (is.character(cas)) {
+        return(cas[1])
+} 
+    else {
+        return("can't find")
+}
+}
+
+# Create a PC t0 CAS form for the survey data
+PC_form <- data.frame(
+    PC = unique(strawberry_survey_chemical$Chemical_Code)[-1]
+)
+n = length(PC_form$PC)
+CAS <- rep(NA,n)
+for (i in 1:n){
+    CAS[i] <- get_cas(PC_form$PC[i])
+    print(i)
+}
+PC_form$CAS <- CAS
+
+
+
+
+merged_data_cas <- merge(strawberry_survey_chemical, PC_form, by.x = "Chemical_Code", by.y = "PC", all.x = TRUE)
+
+toxic <- read_csv("CAS.csv", col_names = TRUE)
+
+
+ merged_data_toxic<- merge(merged_data_cas, toxic, by.x = "CAS", by.y = "CAS", all.x = TRUE)
+
+
+merged_data_toxic<-merged_data_toxic|>
+  filter(!is.na(Toxic))
+ 
+length(merged_data_toxic$Toxic)
+
+
+
+
+```
+###   frequency  of each toxicity
+
+```{r}
+
+
+
+library(ggplot2)
+
+toxic_counts <- merged_data_toxic %>%
+  group_by(Toxic) %>%
+  summarize(n = n())
+
+
+ggplot(data = toxic_counts, aes(x = Toxic, y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Toxic distribution", x = "Toxic", y = "counts")
+
+
+
+
+
+```
+
+
+
+## Conclusion
+
+The final table is merged_ Data_ Toxic has corresponding chemical codes, cas, and toxic, and corresponding information. However, some data did not provide you with chemical codes, so only 707 data were obtained.
+
+
+
